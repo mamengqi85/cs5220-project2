@@ -1,0 +1,9 @@
+#!/bin/bash
+#
+#$ -cwd
+#$ -j y
+#$ -S /bin/bash
+#
+
+./sph.x > timing.out
+exit 0
