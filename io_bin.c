@@ -1,6 +1,8 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <arpa/inet.h>
+
+#include "particle.h"
 #include "io.h"
 
 /*@T
@@ -67,15 +69,17 @@ void write_header(FILE* fp, int n)
  * note that writing a single frame of output may involve multiple
  * calls to [[write_frame_data]].
  *@c*/
-void write_frame_data(FILE* fp, int n, float* x, int* c)
+void write_frame_data(FILE* fp, int n, particle_t* p, int* c)
 {
+    particle_t* p_tmp = p;
     for (int i = 0; i < n; ++i) {
-        uint32_t xi = htonf(x++);
-        uint32_t yi = htonf(x++);
+        uint32_t xi = htonf(p_tmp->x);
+        uint32_t yi = htonf(p_tmp->x+1);
         fwrite(&xi, sizeof(xi), 1, fp);
         fwrite(&yi, sizeof(yi), 1, fp);
         uint32_t ci0 = c ? *c++ : 0;
         uint32_t ci = htonl(ci0);
         fwrite(&ci, sizeof(ci), 1, fp);
+        p_tmp = p_tmp->next;
     }
 }

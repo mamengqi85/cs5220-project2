@@ -8,17 +8,20 @@ all: exe doc
 
 # =======
 
-sph.x: sph.o params.o state.o interact.o leapfrog.o io_bin.o timing.o
+sph.x: sph.o params.o state.o particle.o bin.o interact.o leapfrog.o io_bin.o dump.o timing.o
 	$(CC) $(CFLAGS) $^ -o $@ $(LIBS)
 
-sph.o: sph.c params.h state.h interact.h leapfrog.h io.h timing.h
+sph.o: sph.c params.h state.h particle.o bin.o interact.h leapfrog.h io.h dump.h timing.h
 
 params.o: params.c params.h
 state.o: state.c state.h
-interact.o: interact.c interact.h state.h params.h
-leapfrog.o: leapfrog.c leapfrog.h state.h params.h
-io_txt.o: io_txt.c io.h
-io_bin.o: io_bin.c io.h
+particle.o: particle.c particle.h dump.h
+bin.o: bin.c bin.h particle.h dump.h
+interact.o: interact.c interact.h state.h particle.h bin.h params.h dump.h
+leapfrog.o: leapfrog.c leapfrog.h state.h particle.h bin.h params.h dump.h
+dump.o: dump.c dump.h state.h particle.h bin.h
+io_txt.o: io_txt.c io.h particle.h bin.h
+io_bin.o: io_bin.c io.h particle.h bin.h
 
 %.o: %.c
 	$(CC) -c $(CFLAGS) $(OPTFLAGS) $<
@@ -30,7 +33,7 @@ io_bin.o: io_bin.c
 main.pdf: main.tex codes.tex
 derivation.pdf: derivation.tex check_derivation.tex
 
-codes.tex: params.h state.h interact.c leapfrog.c sph.c params.c io_bin.c
+codes.tex: params.h state.h particle.h interact.c leapfrog.c sph.c params.c io_bin.c
 	dsbweb -o $@ -c $^
 
 check_derivation.tex: check_derivation.m
@@ -60,3 +63,9 @@ realclean: clean
 # ======
 run: sph.x
 	qsub run.qsub
+
+viewer:
+	java -jar Bouncy.jar run.out
+
+diff:
+	diff run.out ../sph_origin/run.out

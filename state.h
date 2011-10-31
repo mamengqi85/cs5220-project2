@@ -17,15 +17,7 @@
 typedef struct sim_state_t {
     int n;                /* Number of particles    */
     float mass;           /* Particle mass          */
-    float* restrict rho;  /* Densities              */
-    float* restrict x;    /* Positions              */
-    float* restrict vh;   /* Velocities (half step) */
-    float* restrict v;    /* Velocities (full step) */
-    float* restrict a;    /* Acceleration           */
 } sim_state_t;
-
-sim_state_t* alloc_state(int n);
-void free_state(sim_state_t* s);
 
 /*@q*/
 #endif /* STATE_H */

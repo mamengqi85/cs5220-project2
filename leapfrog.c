@@ -1,8 +1,10 @@
 #include <stdlib.h>
 #include <stdio.h>
+#include "bin.h"
 #include "state.h"
+#include "particle.h"
 
-static void reflect_bc(sim_state_t* s);
+static void reflect_bc(sim_state_t* s, particle_t* p);
 
 /*@T
  * \section{Leapfrog integration}
@@ -49,18 +51,34 @@ static void reflect_bc(sim_state_t* s);
  * \end{enumerate}
  *@c*/
 
-void leapfrog_step(sim_state_t* s, double dt)
+void leapfrog_step(sim_state_t* s, bin_t* b, particle_t* p, double dt)
 {
-    const float* restrict a = s->a;
-    float* restrict vh = s->vh;
-    float* restrict v  = s->v;
-    float* restrict x  = s->x;
     int n = s->n;
-    for (int i = 0; i < 2*n; ++i) vh[i] += a[i]  * dt;
-    for (int i = 0; i < 2*n; ++i) v[i]   = vh[i] + a[i] * dt / 2;
-    for (int i = 0; i < 2*n; ++i) x[i]  += vh[i] * dt;
-    reflect_bc(s);
-	reflect_bc(s);
+
+    particle_t* p_tmp = p;
+    for (int i = 0; i < n; ++i) {
+        p_tmp->vh[0] += p_tmp->a[0]  * dt;
+        p_tmp->vh[1] += p_tmp->a[1]  * dt;
+        p_tmp = p_tmp->next;
+    }
+
+    p_tmp = p;
+    for (int i = 0; i < n; ++i) {
+        p_tmp->v[0] = p_tmp->vh[0] + p_tmp->a[0] * dt / 2;
+        p_tmp->v[1] = p_tmp->vh[1] + p_tmp->a[1] * dt / 2;
+        p_tmp = p_tmp->next;
+    }
+
+	clear_bins(b);
+    p_tmp = p;
+    for (int i = 0; i < n; ++i) {
+        p_tmp->x[0] += p_tmp->vh[0] * dt;
+        p_tmp->x[1] += p_tmp->vh[1] * dt;
+		assign_bin(b, p_tmp);
+        p_tmp = p_tmp->next;
+    }
+
+    reflect_bc(s, p);
 }
 
 /*@T
@@ -72,18 +90,34 @@ void leapfrog_step(sim_state_t* s, double dt)
  * \end{align*}
  *@c*/
 
-void leapfrog_start(sim_state_t* s, double dt)
+void leapfrog_start(sim_state_t* s, bin_t* b, particle_t* p, double dt)
 {
-    const float* restrict a = s->a;
-    float* restrict vh = s->vh;
-    float* restrict v  = s->v;
-    float* restrict x  = s->x;
     int n = s->n;
-    for (int i = 0; i < 2*n; ++i) vh[i]  = v[i] + a[i] * dt / 2;
-    for (int i = 0; i < 2*n; ++i) v[i]  += a[i]  * dt;
-    for (int i = 0; i < 2*n; ++i) x[i]  += vh[i] * dt;
-    reflect_bc(s);
-	reflect_bc(s);
+
+    particle_t* p_tmp = p;
+    for (int i = 0; i < n; ++i) {
+        p_tmp->vh[0] = p_tmp->v[0] + p_tmp->a[0] * dt / 2;
+        p_tmp->vh[1] = p_tmp->v[1] + p_tmp->a[1] * dt / 2;
+        p_tmp = p_tmp->next;
+    }
+    
+    p_tmp = p;
+    for (int i = 0; i < n; ++i) {
+        p_tmp->v[0] += p_tmp->a[0] * dt;
+        p_tmp->v[1] += p_tmp->a[1] * dt;
+        p_tmp = p_tmp->next;
+    }
+
+    p_tmp = p;
+	clear_bins(b);
+    for (int i = 0; i < n; ++i) {
+        p_tmp->x[0] += p_tmp->vh[0] * dt;
+        p_tmp->x[1] += p_tmp->vh[1] * dt;
+		assign_bin(b, p_tmp);
+        p_tmp = p_tmp->next;
+    }
+
+    reflect_bc(s, p);
 }
 
 /*@T
@@ -129,7 +163,7 @@ static void damp_reflect(int which, float barrier,
  * For each particle, we need to check for reflections on each
  * of the four walls of the computational domain.
  *@c*/
-static void reflect_bc(sim_state_t* s)
+static void reflect_bc(sim_state_t* s, particle_t* p)
 {
     // Boundaries of the computational domain
     const float XMIN = 0.0;
@@ -137,14 +171,17 @@ static void reflect_bc(sim_state_t* s)
     const float YMIN = 0.0;
     const float YMAX = 1.0;
 
-    float* restrict vh = s->vh;
-    float* restrict v  = s->v;
-    float* restrict x  = s->x;
     int n = s->n;
-    for (int i = 0; i < n; ++i, x += 2, v += 2, vh += 2) {
-        if (x[0] < XMIN) damp_reflect(0, XMIN, x, v, vh);
-        if (x[0] > XMAX) damp_reflect(0, XMAX, x, v, vh);
-        if (x[1] < YMIN) damp_reflect(1, YMIN, x, v, vh);
-        if (x[1] > YMAX) damp_reflect(1, YMAX, x, v, vh);
+    particle_t* p_tmp = p;
+    for (int i = 0; i < n; ++i) {
+        if (p_tmp->x[0] < XMIN)
+            damp_reflect(0, XMIN, p_tmp->x, p_tmp->v, p_tmp->vh);
+        if (p_tmp->x[0] > XMAX)
+            damp_reflect(0, XMAX, p_tmp->x, p_tmp->v, p_tmp->vh);
+        if (p_tmp->x[1] < YMIN)
+            damp_reflect(1, YMIN, p_tmp->x, p_tmp->v, p_tmp->vh);
+        if (p_tmp->x[1] > YMAX)
+            damp_reflect(1, YMAX, p_tmp->x, p_tmp->v, p_tmp->vh);
+        p_tmp = p_tmp->next;
     }
 }

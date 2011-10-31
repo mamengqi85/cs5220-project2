@@ -3,13 +3,19 @@
 #include <string.h>
 #include <math.h>
 #include <assert.h>
+#include <omp.h>
 
 #include "io.h"
+#include "dump.h"
+#include "bin.h"
 #include "params.h"
 #include "state.h"
+#include "particle.h"
 #include "interact.h"
 #include "leapfrog.h"
 #include "timing.h"
+
+#define N_THREADS 8
 
 /*@q
  * ====================================================================
@@ -50,7 +56,7 @@ int circ_indicator(float x, float y)
  * with cell sizes of $h/1.3$.  This is close enough to allow the
  * particles to overlap somewhat, but not too much.
  *@c*/
-sim_state_t* place_particles(sim_param_t* param, 
+particle_t* place_particles(sim_state_t* s, bin_t* b, sim_param_t* param, 
                              domain_fun_t indicatef)
 {
     float h  = param->h;
@@ -58,25 +64,35 @@ sim_state_t* place_particles(sim_param_t* param,
 
     // Count mesh points that fall in indicated region.
     int count = 0;
-    for (float x = 0; x < 1; x += hh)
-        for (float y = 0; y < 1; y += hh)
-            count += indicatef(x,y);
+    //TODO:omp does not accept float
+//    #pragma omp parallel	\
+	shared(hh, indicatef)	\
+	private(x, y)		\
+	reduction(+:count)
+    {
+    	for (float x = 0; x < 1; x += hh)
+    	    for (float y = 0; y < 1; y += hh)
+    	        count += indicatef(x,y);
+    }
 
     // Populate the particle data structure
-    sim_state_t* s = alloc_state(count);
-    int p = 0;
+    s->n = count;
+    particle_t* p = alloc_particle(count);
+    particle_t* p_tmp = p;
+    //TODO:omp:float?
     for (float x = 0; x < 1; x += hh) {
         for (float y = 0; y < 1; y += hh) {
             if (indicatef(x,y)) {
-                s->x[2*p+0] = x;
-                s->x[2*p+1] = y;
-                s->v[2*p+0] = 0;
-                s->v[2*p+1] = 0;
-                ++p;
+                p_tmp->x[0] = x;
+                p_tmp->x[1] = y;
+                p_tmp->v[0] = 0;
+                p_tmp->v[1] = 0;
+				assign_bin(b, p_tmp);
+                p_tmp = p_tmp->next;
             }
         }
     }
-    return s;    
+    return p;
 }
 
 /*@T
@@ -92,25 +108,32 @@ sim_state_t* place_particles(sim_param_t* param,
  * that to compute the particle mass necessary in order to achieve the
  * desired reference density.  We do this with [[normalize_mass]].
  * @c*/
-void normalize_mass(sim_state_t* s, sim_param_t* param)
+void normalize_mass(sim_state_t* s, bin_t* b, particle_t* p, sim_param_t* param)
 {
     s->mass = 1;
-    compute_density(s, param);
+    compute_density(s, b, p, param);
     float rho0 = param->rho0;
     float rho2s = 0;
     float rhos  = 0;
-    for (int i = 0; i < s->n; ++i) {
-        rho2s += (s->rho[i])*(s->rho[i]);
-        rhos  += s->rho[i];
+    int i;
+    particle_t* p_tmp = p;
+//    #pragma omp parallel for num_threads(N_THREADS)	\
+	shared(s, p)	\
+	private(i)	\
+        reduction(+:rho2s, rhos)
+    for (i = 0; i < s->n; ++i) {
+        rho2s += (p_tmp->rho[0])*(p_tmp->rho[0]);
+        rhos  += p_tmp->rho[0];
+        p_tmp = p_tmp->next;
     }
     s->mass *= ( rho0*rhos / rho2s );
 }
 
-sim_state_t* init_particles(sim_param_t* param)
+particle_t* init_particles(sim_state_t* s, bin_t* b, sim_param_t* param)
 {
-    sim_state_t* s = place_particles(param, box_indicator);
-    normalize_mass(s, param);
-    return s;
+    particle_t* p = place_particles(s, b, param, box_indicator);
+    normalize_mass(s, b, p, param);
+    return p;
 }
 
 /*@T
@@ -123,22 +146,33 @@ sim_state_t* init_particles(sim_param_t* param)
  * has gone berserk.
  *@c*/
 
-void check_state(sim_state_t* s)
+void check_state(sim_state_t* s, particle_t* p)
 {
-    for (int i = 0; i < s->n; ++i) {
-        float xi = s->x[2*i+0];
-        float yi = s->x[2*i+1];
-        assert( xi >= 0 && xi <= 1 );
-        assert( yi >= 0 && yi <= 1 );
+    int i;
+    float xi, yi;
+    particle_t* p_tmp = p;
+    //TODO:become slower if uncommented.
+    //#pragma omp parallel for num_threads(N_THREADS)	\
+	shared(s)	\
+	private(i, xi, yi)
+    for (i = 0; i < s->n; ++i) {
+        xi = p_tmp->x[0];
+        yi = p_tmp->x[1];
+        assert( xi >= 0 || xi <= 1 );
+        assert( yi >= 0 || yi <= 1 );
+        p_tmp = p_tmp->next;
     }
 }
 
 int main(int argc, char** argv)
 {
     sim_param_t params;
+    sim_state_t s_instance;
     if (get_params(argc, argv, &params) != 0)
         exit(-1);
-    sim_state_t* state = init_particles(&params);
+	bin_t* bin = alloc_bin(params.h);
+    sim_state_t* state = &s_instance;
+    particle_t* part = init_particles(state, bin, &params);
     FILE* fp    = fopen(params.fname, "w");
     int nframes = params.nframes;
     int npframe = params.npframe;
@@ -147,20 +181,27 @@ int main(int argc, char** argv)
 
     tic(0);
     write_header(fp, n);
-    write_frame_data(fp, n, state->x, NULL);
-    compute_accel(state, &params);
-    leapfrog_start(state, dt);
-    check_state(state);
+    write_frame_data(fp, n, part, NULL);
+    compute_accel(state, bin, part, &params);
+    leapfrog_start(state, bin, part, dt);
+	//dump_bins(bin,1);
+    check_state(state, part);
     for (int frame = 1; frame < nframes; ++frame) {
         for (int i = 0; i < npframe; ++i) {
-            compute_accel(state, &params);
-            leapfrog_step(state, dt);
-            check_state(state);
+			if (frame == 71 && i == 0) {
+            	compute_accel(state, bin, part, &params);
+			}
+			else
+            compute_accel(state, bin, part, &params);
+			//dump("dump_hash.out", state, part, 7000);
+            leapfrog_step(state, bin, part, dt);
+            check_state(state, part);
         }
-        write_frame_data(fp, n, state->x, NULL);
+        write_frame_data(fp, n, part, NULL);
     }
     printf("Ran in %g seconds\n", toc(0));
 
     fclose(fp);
-    free_state(state);
+    free_particle(part);
+	free_bin(bin);
 }

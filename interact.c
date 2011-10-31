@@ -1,9 +1,13 @@
 #include <string.h>
 #include <math.h>
 #include <assert.h>
+#include <stdio.h>
 
+#include "dump.h"
+#include "bin.h"
 #include "params.h"
 #include "state.h"
+#include "particle.h"
 #include "interact.h"
 
 /*@q
@@ -23,34 +27,93 @@
  * way that $j$ contributes to $i$).
  *@c*/
 
-void compute_density(sim_state_t* s, sim_param_t* params)
+void compute_density(sim_state_t* s, bin_t* b, particle_t* p,
+		sim_param_t* params)
 {
+	//TODO
     int n = s->n;
-    float* restrict rho = s->rho;
-    const float* restrict x = s->x;
-
     float h  = params->h;
     float h2 = h*h;
     float h8 = ( h2*h2 )*( h2*h2 );
     float C  = 4 * s->mass / M_PI / h8;
 
-    memset(rho, 0, n*sizeof(float));
+    particle_t* p_tmp = p;
+	for (int i = 0; i < n; ++i) {
+		p_tmp->rho[0] = 0;
+		p_tmp = p_tmp->next;
+	}
+
+	p_tmp = p;
+    particle_t* p_tmp2;
     for (int i = 0; i < n; ++i) {
-        rho[i] += 4 * s->mass / M_PI / h2;
-        for (int j = i+1; j < n; ++j) {
-            float dx = x[2*i+0]-x[2*j+0];
-            float dy = x[2*i+1]-x[2*j+1];
-            float r2 = dx*dx + dy*dy;
-            float z  = h2-r2;
-            if (z > 0) {
-                float rho_ij = C*z*z*z;
-                rho[i] += rho_ij;
-                rho[j] += rho_ij;
-            }
+        p_tmp->rho[0] += 4 * s->mass / M_PI / h2;
+		int bn = p_tmp->bn;
+        p_tmp2 = b->bins[bn];
+		int size = b->size[bn];
+        for (int j = 0; j < size; ++j) {
+			if (p_tmp != p_tmp2) {
+            	float dx = p_tmp->x[0]-p_tmp2->x[0];
+            	float dy = p_tmp->x[1]-p_tmp2->x[1];
+            	float r2 = dx*dx + dy*dy;
+            	float z  = h2-r2;
+            	if (z > 0) {
+            	    float rho_ij = C*z*z*z;
+            	    p_tmp->rho[0] += rho_ij;
+            	}
+			}
+            p_tmp2 = p_tmp2->bnext;
         }
+
+        p_tmp2 = find_vertical_bin(b, p_tmp);
+		if (p_tmp2 != NULL) {
+			int size = b->size[p_tmp2->bn];
+        	for (int j = 0; j < size; ++j) {
+        	    float dx = p_tmp->x[0]-p_tmp2->x[0];
+        	    float dy = p_tmp->x[1]-p_tmp2->x[1];
+        	    float r2 = dx*dx + dy*dy;
+        	    float z  = h2-r2;
+        	    if (z > 0) {
+        	        float rho_ij = C*z*z*z;
+        	        p_tmp->rho[0] += rho_ij;
+        	    }
+        	    p_tmp2 = p_tmp2->bnext;
+        	}
+		}
+
+		p_tmp2 = find_horizontal_bin(b, p_tmp);
+		if (p_tmp2 != NULL) {
+			int size = b->size[p_tmp2->bn];
+        	for (int j = 0; j < size; ++j) {
+        	    float dx = p_tmp->x[0]-p_tmp2->x[0];
+        	    float dy = p_tmp->x[1]-p_tmp2->x[1];
+        	    float r2 = dx*dx + dy*dy;
+        	    float z  = h2-r2;
+        	    if (z > 0) {
+        	        float rho_ij = C*z*z*z;
+        	        p_tmp->rho[0] += rho_ij;
+        	    }
+        	    p_tmp2 = p_tmp2->bnext;
+        	}
+		}
+
+		p_tmp2 = find_diagonal_bin(b, p_tmp);
+		if (p_tmp2 != NULL) {
+			size = b->size[p_tmp2->bn];
+        	for (int j = 0; j < size; ++j) {
+        	    float dx = p_tmp->x[0]-p_tmp2->x[0];
+        	    float dy = p_tmp->x[1]-p_tmp2->x[1];
+        	    float r2 = dx*dx + dy*dy;
+        	    float z  = h2-r2;
+        	    if (z > 0) {
+        	        float rho_ij = C*z*z*z;
+        	        p_tmp->rho[0] += rho_ij;
+        	    }
+        	    p_tmp2 = p_tmp2->bnext;
+        	}
+		}
+        p_tmp = p_tmp->next;
     }
 }
-
 
 /*@T
  * \subsection{Computing forces}
@@ -66,8 +129,8 @@ void compute_density(sim_state_t* s, sim_param_t* params)
  * ($\bff_{ij}^{\mathrm{interact}} = -\bff_{ji}^{\mathrm{interact}}$)
  * but it does a very expensive brute force search for neighbors.
  *@c*/
-
-void compute_accel(sim_state_t* state, sim_param_t* params)
+void compute_accel(sim_state_t* state, bin_t* b, particle_t* part,
+		sim_param_t* params)
 {
     // Unpack basic parameters
     const float h    = params->h;
@@ -79,19 +142,18 @@ void compute_accel(sim_state_t* state, sim_param_t* params)
     const float h2   = h*h;
 
     // Unpack system state
-    const float* restrict rho = state->rho;
-    const float* restrict x   = state->x;
-    const float* restrict v   = state->v;
-    float* restrict a         = state->a;
     int n = state->n;
+    particle_t* p_tmp;
 
     // Compute density and color
-    compute_density(state, params);
+    compute_density(state, b, part, params);
 
     // Start with gravity and surface forces
+    p_tmp = part;
     for (int i = 0; i < n; ++i) {
-        a[2*i+0] = 0;
-        a[2*i+1] = -g;
+        p_tmp->a[0] = 0;
+        p_tmp->a[1] = -g;
+        p_tmp = p_tmp->next;
     }
 
     // Constants for interaction term
@@ -100,27 +162,114 @@ void compute_accel(sim_state_t* state, sim_param_t* params)
     float Cv = -40*mu;
 
     // Now compute interaction forces
+    p_tmp = part;
+    particle_t* p_tmp2;
+
     for (int i = 0; i < n; ++i) {
-        const float rhoi = rho[i];
-        for (int j = i+1; j < n; ++j) {
-            float dx = x[2*i+0]-x[2*j+0];
-            float dy = x[2*i+1]-x[2*j+1];
-            float r2 = dx*dx + dy*dy;
-            if (r2 < h2) {
-                const float rhoj = rho[j];
-                float q = sqrt(r2)/h;
-                float u = 1-q;
-                float w0 = C0 * u/rhoi/rhoj;
-                float wp = w0 * Cp * (rhoi+rhoj-2*rho0) * u/q;
-                float wv = w0 * Cv;
-                float dvx = v[2*i+0]-v[2*j+0];
-                float dvy = v[2*i+1]-v[2*j+1];
-                a[2*i+0] += (wp*dx + wv*dvx);
-                a[2*i+1] += (wp*dy + wv*dvy);
-                a[2*j+0] -= (wp*dx + wv*dvx);
-                a[2*j+1] -= (wp*dy + wv*dvy);
-            }
+	//dump("dump_hash.out", state, part, 5);
+        const float rhoi = p_tmp->rho[0];
+		int bn = p_tmp->bn;
+        p_tmp2 = b->bins[bn];
+		int size = b->size[bn];
+        for (int j = 0; j < size; ++j) {
+			if (p_tmp != p_tmp2) {
+            	float dx = p_tmp->x[0]-p_tmp2->x[0];
+            	float dy = p_tmp->x[1]-p_tmp2->x[1];
+            	float r2 = dx*dx + dy*dy;
+            	if (r2 < h2) {
+            	    const float rhoj = p_tmp2->rho[0];
+            	    float q = sqrt(r2)/h;
+            	    float u = 1-q;
+            	    float w0 = C0 * u/rhoi/rhoj;
+            	    float wp = w0 * Cp * (rhoi+rhoj-2*rho0) * u/q;
+            	    float wv = w0 * Cv;
+            	    float dvx = p_tmp->v[0]-p_tmp2->v[0];
+            	    float dvy = p_tmp->v[1]-p_tmp2->v[1];
+            	    p_tmp->a[0] += (wp*dx + wv*dvx);
+            	    p_tmp->a[1] += (wp*dy + wv*dvy);
+            	}
+			}
+            p_tmp2 = p_tmp2->bnext;
         }
+
+		p_tmp2 = find_vertical_bin(b, p_tmp);
+		if (p_tmp2 != NULL) {
+			size = b->size[p_tmp2->bn];
+			for (int j = 0; j < size; ++j) {
+            	float dx = p_tmp->x[0]-p_tmp2->x[0];
+            	float dy = p_tmp->x[1]-p_tmp2->x[1];
+            	float r2 = dx*dx + dy*dy;
+            	if (r2 < h2) {
+            	    const float rhoj = p_tmp2->rho[0];
+            	    float q = sqrt(r2)/h;
+            	    float u = 1-q;
+            	    float w0 = C0 * u/rhoi/rhoj;
+            	    float wp = w0 * Cp * (rhoi+rhoj-2*rho0) * u/q;
+            	    float wv = w0 * Cv;
+            	    float dvx = p_tmp->v[0]-p_tmp2->v[0];
+            	    float dvy = p_tmp->v[1]-p_tmp2->v[1];
+            	    p_tmp->a[0] += (wp*dx + wv*dvx);
+            	    p_tmp->a[1] += (wp*dy + wv*dvy);
+            	    //p_tmp2->a[0] -= (wp*dx + wv*dvx);
+            	    //p_tmp2->a[1] -= (wp*dy + wv*dvy);
+            	}
+				p_tmp2 = p_tmp2->bnext;
+			}
+		}
+
+		p_tmp2 = find_horizontal_bin(b, p_tmp);
+		if (p_tmp2 != NULL) {
+			size = b->size[p_tmp2->bn];
+			for (int j = 0; j < size; ++j) {
+            	float dx = p_tmp->x[0]-p_tmp2->x[0];
+            	float dy = p_tmp->x[1]-p_tmp2->x[1];
+            	float r2 = dx*dx + dy*dy;
+            	if (r2 < h2) {
+            	    const float rhoj = p_tmp2->rho[0];
+            	    float q = sqrt(r2)/h;
+            	    float u = 1-q;
+            	    float w0 = C0 * u/rhoi/rhoj;
+            	    float wp = w0 * Cp * (rhoi+rhoj-2*rho0) * u/q;
+            	    float wv = w0 * Cv;
+            	    float dvx = p_tmp->v[0]-p_tmp2->v[0];
+            	    float dvy = p_tmp->v[1]-p_tmp2->v[1];
+            	    p_tmp->a[0] += (wp*dx + wv*dvx);
+            	    p_tmp->a[1] += (wp*dy + wv*dvy);
+ 
+            	    //p_tmp2->a[0] -= (wp*dx + wv*dvx);
+            	    //p_tmp2->a[1] -= (wp*dy + wv*dvy);
+            	}
+				p_tmp2 = p_tmp2->bnext;
+			}
+		}
+
+		p_tmp2 = find_diagonal_bin(b, p_tmp);
+		if (p_tmp2 != NULL) {
+			size = b->size[p_tmp2->bn];
+			for (int j = 0; j < size; ++j) {
+            	float dx = p_tmp->x[0]-p_tmp2->x[0];
+            	float dy = p_tmp->x[1]-p_tmp2->x[1];
+            	float r2 = dx*dx + dy*dy;
+            	if (r2 < h2) {
+            	    const float rhoj = p_tmp2->rho[0];
+            	    float q = sqrt(r2)/h;
+            	    float u = 1-q;
+            	    float w0 = C0 * u/rhoi/rhoj;
+            	    float wp = w0 * Cp * (rhoi+rhoj-2*rho0) * u/q;
+            	    float wv = w0 * Cv;
+            	    float dvx = p_tmp->v[0]-p_tmp2->v[0];
+            	    float dvy = p_tmp->v[1]-p_tmp2->v[1];
+            	    p_tmp->a[0] += (wp*dx + wv*dvx);
+            	    p_tmp->a[1] += (wp*dy + wv*dvy);
+            	    //p_tmp2->a[0] -= (wp*dx + wv*dvx);
+            	    //p_tmp2->a[1] -= (wp*dy + wv*dvy);
+            	}
+				p_tmp2 = p_tmp2->bnext;
+			}
+		}
+
+        p_tmp = p_tmp->next;
     }
+	//dump("dump_hash_fin.out", state, part, 601);
 }
 
