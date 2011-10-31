@@ -60,6 +60,7 @@ void leapfrog_step(sim_state_t* s, double dt)
     for (int i = 0; i < 2*n; ++i) v[i]   = vh[i] + a[i] * dt / 2;
     for (int i = 0; i < 2*n; ++i) x[i]  += vh[i] * dt;
     reflect_bc(s);
+	reflect_bc(s);
 }
 
 /*@T
@@ -82,6 +83,7 @@ void leapfrog_start(sim_state_t* s, double dt)
     for (int i = 0; i < 2*n; ++i) v[i]  += a[i]  * dt;
     for (int i = 0; i < 2*n; ++i) x[i]  += vh[i] * dt;
     reflect_bc(s);
+	reflect_bc(s);
 }
 
 /*@T

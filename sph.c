@@ -128,8 +128,8 @@ void check_state(sim_state_t* s)
     for (int i = 0; i < s->n; ++i) {
         float xi = s->x[2*i+0];
         float yi = s->x[2*i+1];
-        assert( xi >= 0 || xi <= 1 );
-        assert( yi >= 0 || yi <= 1 );
+        assert( xi >= 0 && xi <= 1 );
+        assert( yi >= 0 && yi <= 1 );
     }
 }
 
